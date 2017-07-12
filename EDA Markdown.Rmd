@@ -24,6 +24,8 @@ library(knitr)
 library(stringr)
 library(DT)
 
+setwd("C:/Users/Mark/Documents/Github/Instacart")
+
 orders <- fread('Data/orders.csv')
 products <- fread('Data/products.csv')
 order_products <- fread('Data/order_products__train.csv')
@@ -108,7 +110,7 @@ orders %>%
 ```
 
 #### How do DOW/hour of day compare?
-This one is sort of interesting. Orders tend to 
+This one is sort of interesting. Orders on Day 0 are concentrated in the early afternon, while Day 1 is centered a little earlier in the day. 
 ```{r warning=FALSE}
 orders %>%
   group_by(order_dow, order_hour_of_day) %>%
@@ -119,20 +121,30 @@ orders %>%
 ```
 
 #### Typical # days between orders?
+Two (majoryly?) noteworthy things: 
+-Immediately see local miaxima at at 7, 14, and 21 days. We might consider classifying these as shoppers with some level of week-to-week tendencies. 
+-Overall mode at the 30+ days. But why....?
+
+Setting aside the modes, positive skew makes sense. 
 ```{r warning=FALSE}
 orders %>% 
   ggplot(aes(x=days_since_prior_order)) + 
   geom_histogram(stat="count", fill="blue")
 ```
 
-#### How many prior orders are there?
+#### How many prior orders are there in total?
+Every order in this dataset was the third or more in a user's entire order history. We see nearly identical amounts of orders at 3-, 4-, and 5-day intervals, with a SHARP decline after that. 
+
+In short, the most orders we've handled have been customers' third, fourth, or fifth. 
 ```{r warning=FALSE}
 orders %>% filter(eval_set=="prior") %>% count(order_number) %>% ggplot(aes(x=order_number, y=n)) + geom_line(color="red", size=1) + geom_point(size=2, color="blue")
 ```
 
-### How many items do people buy? {.tabset}
+### How many items are in a typical order? {.tabset}
 
 #### Training set
+Again a negative skew, centered around 4-6 items in most shopping carts. 
+
 ```{r warning=FALSE}
 order_products %>%
   group_by(order_id) %>%
@@ -144,6 +156,8 @@ order_products %>%
 ```
 
 #### Prior orders set
+Same general negative skew, but somehow a little less severely
+
 ```{r warning=FALSE}
 order_products_prior %>%
   group_by(order_id) %>%
@@ -157,6 +171,7 @@ order_products_prior %>%
 ### Looking more closely now at the items themselves...
 
 #### What are the 10 most popular items on the site?
+
 ```{r fig.height=5.5}
 tmp <- order_products %>% 
   group_by(product_id) %>%
@@ -196,31 +211,119 @@ tmp %>%
 order_products %>% group_by(order_id) %>% summarize(reorder_proportion = round((sum(reordered) / n()) / 0.05) * 0.05) %>% mutate(reorder_proportion = as.factor(reorder_proportion)) %>% ggplot(aes(x=reorder_proportion)) + geom_histogram(stat="count")
 ```
 
-#### At what point in the shopping process do folks typically add reordered items to their carts?
-```{r warning = FALSE}
-order_products %>% group_by(add_to_cart_order) %>% summarize(reorder_proportion = sum(reordered) / n()) %>% ggplot(aes(x=add_to_cart_order, y=reorder_proportion)) + geom_bar(stat="identity")
-```
-
-
-
 #### Which items are REordered the most? 
 
 ```{r warning=FALSE, fig.height=5.5}
-tmp <- order_products %>%
-  group_by(product_id) %>%
-  summarize(proportion_reordered = mean(reordered), n=n()) %>%
-  filter(n>40) %>%
-  top_n(10, wt=proportion_reordered) %>%
-  arrange(desc(proportion_reordered)) %>%
-  left_join(products, by="product_id")
+tmp <-order_products %>% 
+  group_by(product_id) %>% 
+  summarize(proportion_reordered = mean(reordered), n=n()) %>% 
+  filter(n>40) %>% 
+  top_n(20,wt=proportion_reordered) %>% 
+  arrange(desc(proportion_reordered)) %>% 
+  left_join(products,by="product_id")
 
 kable(tmp)
+```
 
+```{r warning=FALSE}
 tmp %>% 
   ggplot(aes(x=reorder(product_name,-proportion_reordered), y=proportion_reordered))+
   geom_bar(stat="identity",fill="red")+
   theme(axis.text.x=element_text(angle=90, hjust=1),axis.title.x = element_blank())+coord_cartesian(ylim=c(0.85,0.95))
 ```
 
+#### At what point in the shopping process do people typically add reordered items to their carts?
+```{r warning = FALSE}
+order_products %>% group_by(add_to_cart_order) %>% summarize(reorder_proportion = sum(reordered) / n()) %>% ggplot(aes(x=add_to_cart_order, y=reorder_proportion)) + geom_bar(stat="identity")
+```
+
+#### Which items do users put into their carts first?
+```{r warning=FALSE}
+tmp <- order_products %>% 
+  group_by(product_id, add_to_cart_order) %>%
+  summarize(count = n()) %>% mutate(pct=count/sum(count)) %>%
+  filter(add_to_cart_order == 1, count > 10) %>%
+  arrange(desc(pct)) %>%
+  left_join(products, by="product_id") %>%
+  select(product_name, pct, count) %>%
+  ungroup() %>%
+  top_n(10, wt=pct)
+
+kable(tmp)
+```
+
+#### Is there a relationship between days since last order and reordering?
+```{r warning=FALSE}
+order_products %>%
+  left_join(orders, by="order_id") %>%
+  group_by(days_since_prior_order) %>%
+  summarize(mean_reorder = mean(reordered)) %>%
+  ggplot(aes(x=days_since_prior_order, y=mean_reorder)) +
+  geom_bar(stat="identity", fill="red")
+```
+
+#### Organic vs. Non-organic
+```{r warning=FALSE}
+products <- products %>% mutate(organic=ifelse(str_detect(products$product_name, 'Organic'), "organic", "non organic"), organic=as.factor(organic))
+
+tmp <- order_products %>% 
+  left_join(products, by="product_id") %>%
+  group_by(organic) %>%
+  summarize(count = n()) %>%
+  mutate(proportion = count/sum(count))
+
+kable(tmp)
+```
+
+There are substantially less organic items than non-organic in the entire catalog
+```{r warning=FALSE}
+tmp %>%
+  ggplot(aes(x=organic, y=count, fill=organic)) +
+  geom_bar(stat="identity")
+```
+
+However, it looks like the organic items are, on average, reordered more often than others
+```{r warning=FALSE}
+tmp <- order_products %>% left_join(products, by="product_id") %>% 
+  group_by(organic) %>%
+  summarize(mean_reordered = mean(reordered))
+
+kable(tmp)
+```
+
+```{r warning=FALSE}
+tmp %>% 
+  ggplot(aes(x=organic, y=mean_reordered, fill=organic)) +
+  geom_bar(stat="identity")
+```
+
+### Let's move to the items that Instacart sells. 
+
+#### First note the structure of the catalog: departments contain aisles, which in turn contain items. Let's take a quick peek...
 
 
+```{r warning=FLASE}
+tmp <- products %>% left_join(departments, on="department_id") %>%
+  left_join(aisles, on="aisle_id") %>%
+  group_by(department) %>%
+  summarize("num aisles" = n_distinct(aisle_id), "num_products" = n_distinct(product_id)) %>%
+  arrange(desc(num_products))
+
+kable(head(tmp, 10))
+```
+
+#### Interesting to see at a portfolio level, but let's take a different route and order things by the amount of attention they're getting...
+
+```{r warning=FLASE}
+tmp <- order_products[, c("order_id", "product_id")] %>% 
+  left_join(products[, c("product_id", "department_id", "aisle_id")], on="product_id") %>%
+  left_join(departments, on="department_id") %>%
+  left_join(aisles, on="aisle_id") %>%
+  group_by(department) %>%
+  summarize("num_produc" = n_distinct(product_id)) %>%
+  arrange(desc(num_products))
+
+kable(head(tmp, 10))
+```
+
+#### Break this down further....?
